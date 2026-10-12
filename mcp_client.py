@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import string
 import sys
 from dataclasses import asdict, dataclass, field
@@ -119,11 +120,33 @@ async def guard_tool_call(request: MCPToolCallRequest, handler) -> CallToolResul
     return result
 
 
+def resolve_commands(connections: dict) -> dict[str, str]:
+    """Replace each stdio server's command with its full path.
+
+    On Windows, npm installs commands as .cmd wrappers that a subprocess can only
+    launch by full path; shutil.which finds them using PATHEXT. Returns
+    {server name: error} for commands that are not installed.
+    """
+    missing = {}
+    for name, connection in connections.items():
+        if connection.get("transport") != "stdio":
+            continue
+        path = shutil.which(connection["command"])
+        if path and sys.platform == "win32" and not Path(path).suffix:
+            # npm also drops an extensionless shell script next to the .cmd; Windows can't run it.
+            path = shutil.which(connection["command"] + ".cmd") or path
+        if path:
+            connection["command"] = path
+        else:
+            missing[name] = f"command not found on PATH: {connection['command']}"
+    return missing
+
+
 async def discover_tools(config_path: str) -> tuple[list[BaseTool], list[ServerStatus]]:
     """Run tools/list on every configured server.
 
-    A server that fails to start, times out, or answers with garbage is skipped
-    and reported in its ServerStatus; the remaining servers still load.
+    A server that is not installed, fails to start, times out, or answers with
+    garbage is skipped and reported in its ServerStatus; the rest still load.
     """
     try:
         connections = load_config(config_path)
@@ -131,12 +154,17 @@ async def discover_tools(config_path: str) -> tuple[list[BaseTool], list[ServerS
         logger.error("Could not load MCP config %s: %s", config_path, exc)
         return [], [ServerStatus(name="config", ok=False, error=str(exc))]
 
+    missing = resolve_commands(connections)
     client = MultiServerMCPClient(connections, tool_interceptors=[guard_tool_call])
     tools: list[BaseTool] = []
     statuses: list[ServerStatus] = []
     seen_names: set[str] = set()
 
     for name in connections:
+        if name in missing:
+            logger.error("Skipping '%s': %s", name, missing[name])
+            statuses.append(ServerStatus(name=name, ok=False, error=missing[name]))
+            continue
         try:
             server_tools = await asyncio.wait_for(client.get_tools(server_name=name), DISCOVERY_TIMEOUT_S)
         except Exception as exc:
