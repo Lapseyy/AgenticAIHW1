@@ -40,7 +40,7 @@ Decide for every request whether a tool is actually needed:
 Some requests need several tools in sequence (for example: search, then fetch a result, then save notes to a file). Keep going until the whole request is done.
 If a tool returns an error or is unavailable, tell the user briefly what failed and continue with whatever you can still do. Never invent tool results.
 You remember earlier messages in this conversation; use them when the user refers back.
-Today's date is {today}."""
+Today's date is {today}. When searching for current or latest information, do not add years to the query unless the user asked for them."""
 
 
 def build_llm() -> BaseChatModel:
