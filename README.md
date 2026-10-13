@@ -2,10 +2,10 @@
 
 A LangGraph agent served over FastAPI. It reasons about each query, discovers and calls tools from **three MCP servers** (filesystem, Tavily search, fetch), remembers the conversation per session, and runs on **Google Cloud Run**.
 
-- **Live URL:** `<PASTE_YOUR_CLOUD_RUN_URL_HERE>`
-- **Author:** `<YOUR NAME>` — Fall 2026
+- **Live URL:** https://csci599-a1-308335294462.us-west1.run.app (interactive docs at [`/docs`](https://csci599-a1-308335294462.us-west1.run.app/docs))
+- **Author:** Edmarck Sosa Pineda — Fall 2026
 - **Framework:** LangGraph + FastAPI + `langchain-mcp-adapters`
-- **LLM backend:** `<OpenAI GPT-5 | NVIDIA NIM model id>` (set by `MODEL_NAME`)
+- **LLM backend:** NVIDIA NIM, `nvidia/nemotron-3-ultra-550b-a55b`, through its OpenAI-compatible endpoint (set by `MODEL_NAME` and `OPENAI_BASE_URL`; OpenAI GPT-5 works with no code changes)
 
 ---
 
@@ -53,7 +53,7 @@ A LangGraph agent served over FastAPI. It reasons about each query, discovers an
 ├── requirements.txt         # Runtime dependencies (pinned)
 ├── requirements-dev.txt     # + pytest, httpx
 ├── Dockerfile               # Multi-stage build, Node MCP servers preinstalled, non-root user
-├── deploy.sh                # Cloud Build + Cloud Run deploy, reads .env
+├── deploy.sh                # Cloud Build + Cloud Run deploy, reads .env (bash)
 ├── .env.example             # Placeholder settings — copy to .env
 ├── .gitignore / .dockerignore / .gcloudignore
 ├── docs/                    # PNG renders of the three architecture diagrams
@@ -184,8 +184,12 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregi
 
 ### Deploy
 ```bash
-./deploy.sh
+bash deploy.sh
 ```
+**On Windows**, run it from Git Bash, not PowerShell. Two things to check first:
+- `gcloud` must be on Git Bash's PATH. If `gcloud --version` fails, run `export PATH="$PATH:/c/Users/<you>/AppData/Local/Google/Cloud SDK/google-cloud-sdk/bin"` (or fully restart VS Code after installing the SDK).
+- `.env` and `deploy.sh` must use LF line endings, not CRLF. Otherwise bash reads every value with a trailing `\r`.
+
 `deploy.sh` sources `.env`, checks that the required keys are set, builds the image with Cloud Build (`gcr.io/$GCP_PROJECT_ID/csci599-a1`), and deploys it. It prints the live URL (`https://csci599-a1-xxxxxxxxxx-uw.a.run.app`). Paste that URL at the top of this README and into Brightspace.
 
 Differences from the assignment's sample command, and why:
@@ -226,6 +230,9 @@ gcloud run services logs read csci599-a1 --region us-west1 --limit 50
 
 Every non-422 status uses the same `{"response": ...}` body.
 
+### `GET /`
+A short JSON guide to the endpoints, so the bare service URL explains itself.
+
 ### `GET /health`
 Returns each MCP server's status and the tool names it discovered through `tools/list`:
 ```json
@@ -250,8 +257,8 @@ Returns each MCP server's status and the tool names it discovered through `tools
 ## 10. Testing & Verification
 
 ```bash
-pytest -v                    # 21 offline tests; no API keys needed
-pytest tests/test_live.py -v # 3 end-to-end tests with the real LLM (needs OPENAI_API_KEY in .env)
+pytest -v                    # 22 offline tests (no keys needed) + 3 live tests if OPENAI_API_KEY is set
+pytest tests/test_live.py -v # only the 3 end-to-end tests with the real LLM
 ```
 
 The offline tests use the **real** filesystem and fetch MCP servers and a scripted stand-in for the LLM (`ScriptedChatModel`). Graph logic, MCP traffic, and memory are therefore tested without spending API credits.
@@ -260,7 +267,7 @@ The offline tests use the **real** filesystem and fetch MCP servers and a script
 |---|---|
 | `test_mcp_integration.py` | `tools/list` discovers real tools and their JSON Schemas. `tools/call` writes and reads a real file. A tool execution error (reading `/etc/passwd`) comes back as an error message. A missing server binary, a server that prints garbage, and a bad config file are skipped without crashing. A malformed result, an unsupported content type, and a server crashing mid-call each become error messages. |
 | `test_agent.py` | The graph chains two real tool calls (write → read) and the LLM's second step sees the first result. A general question produces zero tool calls. Memory is shared within a session and isolated between sessions. The loop guard stops runaway tool calls and the session still works afterwards (both repair paths). |
-| `test_api.py` | Response contract, 422 on bad input, clean 500/503 JSON on errors, `/health` format. |
+| `test_api.py` | Response contract, 422 on bad input, clean 500/503 JSON on errors, `/health` and `/` formats. |
 | `test_live.py` | With the real LLM: no tool for a knowledge question, filesystem tools for a file request, memory across two turns. |
 
 ### Watching real MCP traffic
@@ -315,7 +322,7 @@ flowchart LR
         T -->|loop back| A
     end
 
-    A <-->|chat completions| LLM[(LLM backend<br/>OpenAI GPT-5 or NVIDIA NIM)]
+    A <-->|chat completions| LLM[(LLM backend<br/>NVIDIA NIM<br/>nemotron-3-ultra-550b-a55b)]
     G <-->|load / save messages| CP[(MemorySaver checkpointer<br/>in-memory, per session)]
     T -->|tools/call| MC[MCP client wrapper - mcp_client.py<br/>MultiServerMCPClient + guard_tool_call]
 
@@ -353,7 +360,7 @@ flowchart LR
     subgraph LOCAL[Local development]
         ENV[.env<br/>OPENAI_API_KEY, TAVILY_API_KEY,<br/>MODEL_NAME, GCP_PROJECT_ID] -->|load_dotenv| APP[python main.py]
         ENV -->|--env-file| DK[docker run csci599-a1]
-        APP --> LLM1[(Cloud LLM backend<br/>same as deployed)]
+        APP --> LLM1[(NVIDIA NIM<br/>same backend as deployed)]
         DK --> LLM1
     end
 
@@ -362,8 +369,8 @@ flowchart LR
     CB --> AR[(Artifact Registry<br/>gcr.io/PROJECT/csci599-a1)]
     AR --> CR[Cloud Run service csci599-a1<br/>us-west1, max-instances 1, 1Gi]
     SH -->|--set-env-vars<br/>OPENAI_API_KEY, TAVILY_API_KEY,<br/>MODEL_NAME, OPENAI_BASE_URL| CR
-    CR --> URL[Live URL<br/>https://csci599-a1-xxxx-uw.a.run.app]
-    CR --> LLM2[(Cloud LLM backend)]
+    CR --> URL[Live URL<br/>csci599-a1-308335294462.us-west1.run.app]
+    CR --> LLM2[(NVIDIA NIM API)]
 ```
 
 ---
@@ -372,9 +379,9 @@ flowchart LR
 
 | Service | Tier | Cost for this assignment |
 |---|---|---|
-| Cloud Run | $50 education credit | ~$0 idle (scale-to-zero); actual: `<fill in>` |
-| Cloud Build / Artifact Registry | Education credit | Cents per build; actual: `<fill in>` |
-| OpenAI GPT-5 *(or NVIDIA NIM free tier)* | Pay-as-you-go *(or free, ~40 req/min)* | Actual: `<fill in from usage dashboard>` |
+| Cloud Run | Google Cloud free-trial credit (education coupon not available to me) | ~$0 idle (scale-to-zero); actual: `<fill in from Billing>` |
+| Cloud Build / Artifact Registry | Free-trial credit | Cents per build; actual: `<fill in from Billing>` |
+| NVIDIA NIM (`nemotron-3-ultra-550b-a55b`) | Free developer endpoint (~40 req/min) | $0 |
 | Tavily | Free / student Project Plan (4,000 credits/mo) | $0 |
 | Filesystem + Fetch MCP servers | Open source | $0 |
 
@@ -385,10 +392,12 @@ flowchart LR
 | Symptom | Fix |
 |---|---|
 | `OPENAI_API_KEY is not set` at startup | Fill in `.env` locally, or check `--set-env-vars` on Cloud Run |
-| `/health` shows a server with `ok: false` | Locally: are the Node servers installed globally (`npm ls -g`)? Check the startup logs for the error. |
+| `/health` shows `command not found on PATH` | Install the Node servers globally (`npm install -g ...`, §6), then open a new terminal so PATH updates. On Windows, `where.exe mcp-server-filesystem` should print a `.cmd` path. |
+| `/health` shows another `ok: false` error | Check the startup logs for that server's error |
 | Memory "forgets" between requests | Send the same `session_id`. Confirm `--max-instances 1`. A reset after scale-to-zero is expected. |
 | Tavily works locally but not on Cloud Run | `TAVILY_API_KEY` missing from `--set-env-vars` (`deploy.sh` checks for it) |
 | Container OOM restarts | Increase `--memory` in `deploy.sh` |
+| `fetch` fails with `EACCES ... readabilipy/javascript/node_modules` | The Dockerfile pre-installs readabilipy's Node dependencies at build time; rebuild the image. Without that step the library tries `npm install` at runtime as the non-root user and fails. |
 | Fetch refuses a site | `mcp-server-fetch` respects `robots.txt` by default. The agent reports the refusal. |
 | Slow first request | Cold start plus a new server process per tool call. `--min-instances 1` removes the cold start but costs money. |
 
@@ -403,6 +412,5 @@ flowchart LR
 
 **Frameworks and libraries:** LangGraph, LangChain Core, `langchain-openai`, `langchain-mcp-adapters`, MCP Python SDK, FastAPI, Uvicorn, python-dotenv, pytest.
 
-**Adapted code:** `<list any code adapted from tutorials or docs with its URL. It must also appear as "# Adapted from <URL> — <reason>" in the source and in PROCESS_LOG.md.>`
+**Adapted code:** None. No code was copied or adapted from tutorials, repositories, or documentation examples. The code was written with AI assistance, which is documented in `PROCESS_LOG.md`.
 
-**AI-assisted development:** see `PROCESS_LOG.md`.

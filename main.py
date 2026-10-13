@@ -49,6 +49,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="CSCI 599 A1 MCP Agent", lifespan=lifespan)
 
 
+@app.get("/")
+async def index() -> dict:
+    """Landing info so the bare service URL explains how to use the API."""
+    return {
+        "service": "CSCI 599 A1 MCP agent",
+        "chat": 'POST /chat with JSON {"query": "...", "session_id": "..."}',
+        "health": "GET /health",
+        "interactive_docs": "GET /docs",
+    }
+
+
 @app.get("/health")
 async def health(request: Request) -> dict:
     return {"status": "ok", "mcp_servers": status_report(request.app.state.mcp_status)}

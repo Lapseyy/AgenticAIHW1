@@ -57,6 +57,11 @@ def test_llm_rate_limit_returns_503(client):
     assert "rate-limited" in reply.json()["response"]
 
 
+def test_root_explains_the_api(client):
+    body = client.get("/").json()
+    assert "/chat" in body["chat"]
+
+
 def test_health_lists_mcp_servers(client):
     body = client.get("/health").json()
     assert body["mcp_servers"][0]["name"] == "filesystem"

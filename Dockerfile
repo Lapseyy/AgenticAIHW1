@@ -17,6 +17,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm && \
 
 # Packages go to /usr/local (not /root/.local) so the non-root user can read them.
 COPY --from=build /install /usr/local
+
+# The fetch server's readabilipy library runs `npm install` inside site-packages on the
+# first fetch. The non-root user can't write there (EACCES), and the unpinned install pulls
+# packages that need Node 22+. Install its Node dependencies now, as root, pinned to
+# versions that support Debian's Node 20.
+RUN cd /usr/local/lib/python3.13/site-packages/readabilipy/javascript && \
+    npm install --omit=dev --no-audit --no-fund jsdom@26 @mozilla/readability@0.6 minimist@1 && \
+    npm cache clean --force
+
 COPY . .
 
 RUN useradd -m appuser && mkdir -p /app/workspace && chown -R appuser:appuser /app
